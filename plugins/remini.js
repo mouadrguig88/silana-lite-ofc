@@ -1,59 +1,98 @@
-import { createReadStream, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { Buffer } from 'buffer';
-import fetch from 'node-fetch'; // Ensure you have node-fetch installed
+import axios from "axios";
+import FormData from "form-data";
 
-async function Upscale(imageBuffer) {
-    try {
-        const response = await fetch("https://lexica.qewertyy.dev/upscale", {
-            body: JSON.stringify({
-                image_data: Buffer.from(imageBuffer, "base64"),
-                format: "binary",
-            }),
-            headers: {
-                "Content-Type": "application/json",
-            },
-            method: "POST",
-        });
-        return Buffer.from(await response.arrayBuffer());
-    } catch {
-        return null;
+/**
+ * Enhance image using ihancer API
+ */
+async function ihancer(buffer, { method = 1, size = "low" } = {}) {
+  const availableSizes = ["low", "medium", "high"];
+
+  if (!buffer || !Buffer.isBuffer(buffer)) {
+    throw new Error("Image buffer is required");
+  }
+
+  if (method < 1 || method > 4) {
+    throw new Error("Available methods: 1, 2, 3, 4");
+  }
+
+  if (!availableSizes.includes(size)) {
+    throw new Error(`Available sizes: ${availableSizes.join(", ")}`);
+  }
+
+  const form = new FormData();
+  form.append("method", method.toString());
+  form.append("is_pro_version", "false");
+  form.append("is_enhancing_more", "false");
+  form.append("max_image_size", size);
+  form.append("file", buffer, `${Date.now()}.jpg`);
+
+  const response = await axios.post(
+    "https://ihancer.com/api/enhance",
+    form,
+    {
+      headers: {
+        ...form.getHeaders(),
+        "accept-encoding": "gzip",
+        host: "ihancer.com",
+        "user-agent": "Dart/3.5 (dart:io)",
+      },
+      responseType: "arraybuffer",
     }
+  );
+
+  return Buffer.from(response.data);
 }
 
-let handler = async (m, { conn }) => {
-    // Check if the message contains an image
-    if (!m.quoted || !m.quoted.mimetype || !m.quoted.mimetype.startsWith('image')) {
-        return m.reply('Please reply to an image with the command to upscale it.');
-    }
+let handler = async (m, { conn, usedPrefix, command }) => {
 
-    // Download the image
-    const media = await m.quoted.download();
-    const imageBuffer = media.toString('base64');
+  let q = m.quoted ? m.quoted : m;
+  const mime = (q.msg || q).mimetype || "";
 
-    // Upscale the image
-    const upscaledImageBuffer = await Upscale(imageBuffer);
+  if (!mime) {
+    throw `
+🖼️ *HD Image Enhancer*
 
-    if (!upscaledImageBuffer) {
-        return m.reply('Failed to upscale the image.');
-    }
+This feature enhances your image quality and makes it clearer.
 
-    // Save the upscaled image to a temporary file
-    const tempFilePath = join(tmpdir(), 'upscaled_image.png');
-    await writeFile(tempFilePath, upscaledImageBuffer);
+📌 How to use:
+1. Send or reply to an image
+2. Type: ${usedPrefix + command}
 
-    // Send the upscaled image
-    await conn.sendFile(m.chat, tempFilePath, 'upscaled_image.png', 'Here is your HD image: by silana lite ai', m);
+Example:
+• Reply to image → ${usedPrefix + command}
 
-    // Clean up the temporary file
-    unlinkSync(tempFilePath);
-}
+Supported formats:
+• JPG
+• JPEG
+• PNG
+`;
+  }
 
-handler.help = handler.command = ['remini','hd']
-handler.tags = ['tools']
-handler.limit = true
-export default handler
+  if (!/image\/(jpe?g|png)/.test(mime)) {
+    throw `❌ Unsupported file type: ${mime}\nOnly JPG and PNG images are supported.`;
+  }
 
-// Helper function to write files using promises
-import { writeFile } from 'fs/promises';
+  m.react("⏳");
+
+  try {
+    const img = await q.download();
+
+    // Default enhancement: method 1 + high quality
+    const result = await ihancer(img, { method: 1, size: "high" });
+
+    await conn.sendFile(m.chat, result, "hd.jpg", "✨ Image successfully enhanced!", m);
+
+    m.react("✅");
+
+  } catch (err) {
+    console.error(err);
+    m.react("❌");
+    throw "Failed to enhance image. Please try again later.";
+  }
+};
+
+handler.help = handler.command = ["remini"];
+handler.tags = ["editor"];
+handler.limit = 2;
+
+export default handler;

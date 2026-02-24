@@ -1,68 +1,60 @@
-import axios from "axios";
+import axios from 'axios'
+import cheerio from 'cheerio'
 
-let handler = async (m, { conn, text }) => {
-    if (!text) throw "Please provide a Pinterest video link. Example:\n *.pindl* https://www.pinterest.com/pin/695102523772320948";
+let handler = async (m, { conn, args }) => {
+  try {
+    if (!args[0]) return m.reply('Where is the Pinterest link?')
+    let pinterestUrl = args[0]
+    
+    let { csrfToken, cookies } = await getSnappinToken()
+    let { data } = await axios.post('https://snappin.app/', { url: pinterestUrl }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-csrf-token': csrfToken,
+        Cookie: cookies,
+        Referer: 'https://snappin.app',
+        Origin: 'https://snappin.app',
+        'User-Agent': 'Mozilla/5.0'
+      }
+    })
 
-    try {
-        m.reply("المرجو الانتظار قليلا لا تنسى ان تتابع \n instagram.com/noureddine_ouafy");
+    let $ = cheerio.load(data)
+    let downloadLinks = $('a.button.is-success').map((_, el) => $(el).attr('href')).get()
 
-        const { medias, title } = await pindl(text);
-
-        // Validate the response structure
-        if (!medias || !Array.isArray(medias)) throw "Failed to retrieve media. Please try again with a valid URL.";
-
-        // Filter for MP4 media
-        let mp4 = medias.filter(v => v.extension === "mp4");
-
-        if (mp4.length > 0) {
-            const size = formatSize(mp4[0].size); // Format the size here
-            await conn.sendMessage(
-                m.chat,
-                { 
-                    video: { url: mp4[0].url }, 
-                    caption: `\`${title}\`\nQuality: ${mp4[0].quality}\nSize: ${size}` 
-                },
-                { quoted: m }
-            );
-        } else if (medias[0]) {
-            // Fallback to the first available media
-            await conn.sendFile(m.chat, medias[0].url, '', `\`${title}\``, m);
-        } else {
-            throw "No downloadable media found for the provided link.";
-        }
-    } catch (e) {
-        throw `An error occurred: ${e}`;
+    let mediaUrl = null
+    for (let link of downloadLinks) {
+      let fullLink = link.startsWith('http') ? link : 'https://snappin.app' + link
+      let head = await axios.head(fullLink).catch(() => null)
+      let contentType = head?.headers?.['content-type'] || ''
+      
+      if (contentType.includes('video')) {
+        mediaUrl = { url: fullLink, type: 'video' }
+        break
+      } else if (contentType.includes('image')) {
+        mediaUrl = { url: fullLink, type: 'image' }
+      }
     }
-};
 
-handler.help = ["pindl"];
-handler.command = /^(pindl)$/i;
-handler.tags = ["downloader"];
-
-export default handler;
-
-async function pindl(url) {
-    try {
-        const apiEndpoint = 'https://pinterestdownloader.io/frontendService/DownloaderService';
-        const params = { url };
-        
-        // Fetch the data from the API
-        let { data } = await axios.get(apiEndpoint, { params });
-        
-        // Ensure the response structure is as expected
-        if (!data || !data.medias) throw "Invalid API response.";
-        
-        return data;
-    } catch (e) {
-        console.error("Error in pindl function:", e.message);
-        throw "Failed to fetch data from Pinterest Downloader. Please try again.";
+    if (mediaUrl.type === 'video') {
+      await conn.sendMessage(m.chat, { video: { url: mediaUrl.url } }, { quoted: m })
+    } else {
+      await conn.sendMessage(m.chat, { image: { url: mediaUrl.url } }, { quoted: m })
     }
+  } catch (e) {
+    m.reply(e.message)
+  }
 }
 
-// Helper function to format file size
-function formatSize(bytes) {
-    if (bytes === 0) return "0 B";
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+async function getSnappinToken() {
+  let { headers, data } = await axios.get('https://snappin.app/')
+  let cookies = headers['set-cookie'].map(c => c.split(';')[0]).join('; ')
+  let $ = cheerio.load(data)
+  let csrfToken = $('meta[name="csrf-token"]').attr('content')
+  return { csrfToken, cookies }
 }
+
+handler.help = ['pindl']
+handler.command = ['pindl']
+handler.tags = ['downloader']
+handler.limit = true 
+export default handler
